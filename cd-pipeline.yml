@@ -10,7 +10,7 @@ resources:
       - main
 
 pool:
-  name: 'Lab4-Agent'
+  name: 'Default'
 
 jobs:
 - deployment: DeployWeb
