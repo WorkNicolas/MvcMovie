@@ -3,14 +3,14 @@ trigger:
 - main
 
 pool:
-  name: 'Default'
+  name: 'Default' # This agent handles the COMPILING
 
 variables:
   buildConfiguration: 'Release'
 
 steps:
 - task: DotNetCoreCLI@2
-  displayName: 'Restore dependencies'
+  displayName: 'Restore'
   inputs:
     command: 'restore'
     projects: 'MvcMovie/MvcMovie.csproj'
@@ -31,8 +31,7 @@ steps:
     zipAfterPublish: true
 
 - task: PublishBuildArtifacts@1
-  displayName: 'Publish Artifact: drop'
+  displayName: 'Publish Artifact'
   inputs:
     PathtoPublish: '$(Build.ArtifactStagingDirectory)'
     ArtifactName: 'drop'
-    publishLocation: 'Container'
