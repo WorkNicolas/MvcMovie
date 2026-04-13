@@ -1,0 +1,37 @@
+# CD Pipeline for MvcMovie
+trigger: none
+
+resources:
+  pipelines:
+  - pipeline: ci_pipeline
+    source: 'MvcMovie-CI' # Make sure this matches your CI pipeline name in Azure DevOps
+    trigger:
+      branches:
+      - main
+
+pool:
+  name: 'Lab4-Agent'
+
+jobs:
+- deployment: DeployWeb
+  displayName: 'Deploy Web App'
+  environment: 'MvcMovieDeploymentGroup' # You should create an Environment named this in ADO
+  strategy:
+    runOnce:
+      deploy:
+        steps:
+        - download: ci_pipeline
+          artifact: drop
+          displayName: 'Download CI Artifact'
+
+        - task: ExtractFiles@1
+          displayName: 'Extract Web App'
+          inputs:
+            archiveFilePatterns: '$(Pipeline.Workspace)/ci_pipeline/drop/*.zip'
+            destinationFolder: 'C:\MvcMovieDeploy' # Local path on your machine
+            cleanDestinationFolder: true
+
+        - script: |
+            echo "Application deployed successfully to C:\MvcMovieDeploy"
+            echo "To run the app, navigate to C:\MvcMovieDeploy and run: dotnet MvcMovie.dll"
+          displayName: 'Verification Message'
