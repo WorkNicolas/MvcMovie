@@ -4,9 +4,11 @@
 #     Project Settings > Service Connections > GitHub (Personal Access Token)
 #   - SonarQube service connection set up in Azure DevOps
 #     Project Settings > Service Connections > SonarQube
-#   - Variable groups created in Azure DevOps Library:
-#     "sonar-vars"  : SONAR_HOST_URL, SONAR_PROJECT_KEY
-#     "release-vars": ARTIFACT_ID, GROUP_ID, VERSION
+#   - Deploy folders created on agent machine:
+#     C:\Commons\Documents\Homework\Semester 6\COMP 367\Final Project\Deploy\Dev
+#     C:\Commons\Documents\Homework\Semester 6\COMP 367\Final Project\Deploy\QAT
+#     C:\Commons\Documents\Homework\Semester 6\COMP 367\Final Project\Deploy\Staging
+#     C:\Commons\Documents\Homework\Semester 6\COMP 367\Final Project\Deploy\Production
 
 trigger:
   branches:
@@ -22,7 +24,8 @@ resources:
 
 variables:
   buildConfiguration: 'Release'
-  mavenPomFile: 'pom.xml'
+  projectPath: 'MvcMovie/MvcMovie.csproj'
+  deployBase: 'C:\Commons\Documents\Homework\Semester 6\COMP 367\Final Project\Deploy'
 
 stages:
 
@@ -39,51 +42,40 @@ stages:
           name: 'Default'
         steps:
 
-          # STEP 1 — Compile using Maven
-          - task: Maven@4
-            displayName: 'Step 1: Compile Project (Maven)'
+          # STEP 1 — Compile using dotnet build
+          - task: DotNetCoreCLI@2
+            displayName: 'Step 1: Compile Project (dotnet build)'
             inputs:
-              mavenPomFile: '$(mavenPomFile)'
-              goals: 'compile'
-              publishJUnitResults: false
-              javaHomeOption: 'JDKVersion'
-              jdkVersionOption: '1.17'
-              mavenVersionOption: 'Default'
+              command: 'build'
+              projects: '$(projectPath)'
+              arguments: '--configuration $(buildConfiguration)'
 
-          # STEP 2 — Unit tests + code coverage report (JaCoCo)
-          - task: Maven@4
-            displayName: 'Step 2: Unit Tests and Code Coverage (Maven + JaCoCo)'
+          # STEP 2 — Unit tests + code coverage report (coverlet)
+          - task: DotNetCoreCLI@2
+            displayName: 'Step 2: Unit Tests and Code Coverage (dotnet test + coverlet)'
             inputs:
-              mavenPomFile: '$(mavenPomFile)'
-              goals: 'test'
-              publishJUnitResults: true
-              testResultsFiles: '**/surefire-reports/TEST-*.xml'
-              codeCoverageToolOption: 'JaCoCo'
-              codeCoverageClassFilter: '+:com.*,-:com.*Test*'
-              javaHomeOption: 'JDKVersion'
-              jdkVersionOption: '1.17'
-              mavenVersionOption: 'Default'
+              command: 'test'
+              projects: '**/*Tests/*.csproj'
+              arguments: '--configuration $(buildConfiguration) --collect:"XPlat Code Coverage" --results-directory $(Build.SourcesDirectory)/TestResults'
+              publishTestResults: true
 
           # SonarQube — static code analysis
           - task: SonarQubePrepare@5
             displayName: 'SonarQube: Prepare Analysis'
             inputs:
-              SonarQube: 'SonarQube-Connection'   # Name of your SonarQube service connection
-              scannerMode: 'Other'
+              SonarQube: 'SonarQube-Connection'
+              scannerMode: 'MSBuild'
+              projectKey: 'WorkNicolas_MvcMovie'
+              projectName: 'MvcMovie'
               extraProperties: |
-                sonar.projectKey=$(SONAR_PROJECT_KEY)
-                sonar.host.url=$(SONAR_HOST_URL)
-                sonar.java.coveragePlugin=jacoco
-                sonar.coverage.jacoco.xmlReportPaths=$(Build.SourcesDirectory)/target/site/jacoco/jacoco.xml
+                sonar.cs.opencover.reportsPaths=$(Build.SourcesDirectory)/TestResults/**/coverage.opencover.xml
 
-          - task: Maven@4
-            displayName: 'SonarQube: Run Analysis'
+          - task: DotNetCoreCLI@2
+            displayName: 'SonarQube: Build for Analysis'
             inputs:
-              mavenPomFile: '$(mavenPomFile)'
-              goals: 'sonar:sonar'
-              publishJUnitResults: false
-              javaHomeOption: 'JDKVersion'
-              jdkVersionOption: '1.17'
+              command: 'build'
+              projects: '$(projectPath)'
+              arguments: '--configuration $(buildConfiguration)'
 
           - task: SonarQubePublish@5
             displayName: 'SonarQube: Publish Quality Gate Result'
@@ -92,7 +84,7 @@ stages:
 
 # ─────────────────────────────────────────────────────────────────
 # STAGE 2 — DELIVER (CD)
-# Maven release:perform packages and publishes the artifact
+# dotnet publish packages and publishes the artifact as a zip
 # ─────────────────────────────────────────────────────────────────
   - stage: Deliver
     displayName: 'Deliver Stage'
@@ -100,24 +92,23 @@ stages:
     condition: succeeded()
     jobs:
       - job: DeliverJob
-        displayName: 'Release Artifact (Maven)'
+        displayName: 'Release Artifact (dotnet publish)'
         pool:
           name: 'Default'
         steps:
 
-          - task: Maven@4
-            displayName: 'Maven Package and Publish Artifact'
+          - task: DotNetCoreCLI@2
+            displayName: 'dotnet publish — Package Artifact'
             inputs:
-              mavenPomFile: '$(mavenPomFile)'
-              goals: 'package'
-              publishJUnitResults: false
-              javaHomeOption: 'JDKVersion'
-              jdkVersionOption: '1.17'
+              command: 'publish'
+              publishWebProjects: true
+              arguments: '--configuration $(buildConfiguration) --output $(Build.ArtifactStagingDirectory)'
+              zipAfterPublish: true
 
           - task: PublishBuildArtifacts@1
             displayName: 'Publish Artifact to Drop'
             inputs:
-              PathtoPublish: '$(Build.SourcesDirectory)/target'
+              PathtoPublish: '$(Build.ArtifactStagingDirectory)'
               ArtifactName: 'drop'
               publishLocation: 'Container'
 
@@ -145,8 +136,8 @@ stages:
                   displayName: 'Deploy Artifact to Dev Server'
                   inputs:
                     SourceFolder: '$(Pipeline.Workspace)/drop'
-                    Contents: '**/*.jar'
-                    TargetFolder: 'C:\Deploy\Dev'
+                    Contents: '**/*.zip'
+                    TargetFolder: '$(deployBase)\Dev'
                     CleanTargetFolder: true
 
 # ─────────────────────────────────────────────────────────────────
@@ -173,8 +164,8 @@ stages:
                   displayName: 'Deploy Artifact to QAT Server'
                   inputs:
                     SourceFolder: '$(Pipeline.Workspace)/drop'
-                    Contents: '**/*.jar'
-                    TargetFolder: 'C:\Deploy\QAT'
+                    Contents: '**/*.zip'
+                    TargetFolder: '$(deployBase)\QAT'
                     CleanTargetFolder: true
 
 # ─────────────────────────────────────────────────────────────────
@@ -201,8 +192,8 @@ stages:
                   displayName: 'Deploy Artifact to Staging Server'
                   inputs:
                     SourceFolder: '$(Pipeline.Workspace)/drop'
-                    Contents: '**/*.jar'
-                    TargetFolder: 'C:\Deploy\Staging'
+                    Contents: '**/*.zip'
+                    TargetFolder: '$(deployBase)\Staging'
                     CleanTargetFolder: true
 
 # ─────────────────────────────────────────────────────────────────
@@ -229,6 +220,6 @@ stages:
                   displayName: 'Deploy Artifact to Production Server'
                   inputs:
                     SourceFolder: '$(Pipeline.Workspace)/drop'
-                    Contents: '**/*.jar'
-                    TargetFolder: 'C:\Deploy\Production'
+                    Contents: '**/*.zip'
+                    TargetFolder: '$(deployBase)\Production'
                     CleanTargetFolder: true
