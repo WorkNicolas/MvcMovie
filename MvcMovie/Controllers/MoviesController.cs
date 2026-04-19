@@ -176,9 +176,15 @@ namespace MvcMovie.Controllers
         // GET: Movies/SearchByTitle
         public async Task<IActionResult> SearchByTitle(string query)
         {
-            // [BUG] No null/empty check — throws NullReferenceException when query is null
+            // FIX: Guard against null/empty query — return empty list instead of throwing
+            if (string.IsNullOrWhiteSpace(query))
+            {
+                ViewData["Query"] = string.Empty;
+                return View(new List<Movie>());
+            }
+
             var results = await _context.Movie
-                .Where(m => m.Title.Contains(query))
+                .Where(m => m.Title!.Contains(query))
                 .ToListAsync();
 
             ViewData["Query"] = query;
