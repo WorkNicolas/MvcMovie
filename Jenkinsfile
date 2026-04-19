@@ -1,11 +1,6 @@
 pipeline {
     agent any
     
-    tools {
-        // Reference the MSBuild tool we configured in Jenkins
-        // If using dotnet instead, we'll modify this later
-    }
-    
     environment {
         // Define project-specific variables
         SOLUTION_FILE = 'MvcMovie.sln'
@@ -38,8 +33,7 @@ pipeline {
         stage('Test') {
             steps {
                 echo 'Running tests...'
-                // We'll add test commands here in the next step
-                echo 'Test stage placeholder - will add actual tests later'
+                echo 'Test stage - will add actual tests later'
             }
         }
     }
