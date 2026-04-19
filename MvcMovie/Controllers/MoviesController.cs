@@ -39,10 +39,17 @@ namespace MvcMovie.Controllers
                 movies = movies.Where(x => x.Genre == movieGenre);
             }
 
+            // ADD: materialize the query into a list first
+            var movieList = await movies.ToListAsync();
+
+            // ADD: [BUG] off-by-one inflates count by 1
+            ViewData["MovieCount"] = movieList.Count() + 1;
+
             var movieGenreVM = new MovieGenreViewModel
             {
                 Genres = new SelectList(await genreQuery.Distinct().ToListAsync()),
-                Movies = await movies.ToListAsync()
+                // CHANGE: Movies was previously "await movies.ToListAsync()" — use movieList instead
+                Movies = movieList
             };
 
             return View(movieGenreVM);
