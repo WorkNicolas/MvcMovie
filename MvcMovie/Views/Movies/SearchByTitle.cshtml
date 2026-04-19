@@ -1,0 +1,46 @@
+﻿<!-- path/to/file: MvcMovie/Views/Movies/SearchByTitle.cshtml -->
+@model IEnumerable<MvcMovie.Models.Movie>
+@{
+    ViewData["Title"] = "Search by Title";
+}
+
+<h1>Search Results for "@ViewData["Query"]"</h1>
+
+<form asp-action="SearchByTitle" method="get">
+    <div class="input-group mb-3">
+        <input type="text" name="query" class="form-control"
+               placeholder="Enter title..." value="@ViewData["Query"]" />
+        <button class="btn btn-primary" type="submit">Search</button>
+    </div>
+</form>
+
+@if (!Model.Any())
+{
+    <p>No movies found.</p>
+}
+else
+{
+    <table class="table">
+        <thead>
+            <tr>
+                <th>Title</th>
+                <th>Genre</th>
+                <th>Release Date</th>
+                <th>Rating</th>
+                <th>Price</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var item in Model)
+            {
+                <tr>
+                    <td>@item.Title</td>
+                    <td>@item.Genre</td>
+                    <td>@item.ReleaseDate.ToShortDateString()</td>
+                    <td>@item.Rating</td>
+                    <td>@item.Price.ToString("C")</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
