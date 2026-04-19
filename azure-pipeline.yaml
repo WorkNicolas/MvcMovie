@@ -1,0 +1,234 @@
+# path/to/file: azure-pipelines.yml
+# Prerequisites:
+#   - GitHub connection via PAT set up in Azure DevOps
+#     Project Settings > Service Connections > GitHub (Personal Access Token)
+#   - SonarQube service connection set up in Azure DevOps
+#     Project Settings > Service Connections > SonarQube
+#   - Variable groups created in Azure DevOps Library:
+#     "sonar-vars"  : SONAR_HOST_URL, SONAR_PROJECT_KEY
+#     "release-vars": ARTIFACT_ID, GROUP_ID, VERSION
+
+trigger:
+  branches:
+    include:
+      - main
+
+resources:
+  repositories:
+    - repository: self
+      type: github
+      endpoint: 'GitHub-PAT-Connection'   # Name of your GitHub PAT service connection
+      name: WorkNicolas/MvcMovie
+
+variables:
+  buildConfiguration: 'Release'
+  mavenPomFile: 'pom.xml'
+
+stages:
+
+# ─────────────────────────────────────────────────────────────────
+# STAGE 1 — BUILD (CI)
+# Compiles the project and runs unit tests with code coverage
+# ─────────────────────────────────────────────────────────────────
+  - stage: Build
+    displayName: 'Build Stage'
+    jobs:
+      - job: BuildJob
+        displayName: 'Compile, Test, and Analyze'
+        pool:
+          name: 'Default'
+        steps:
+
+          # STEP 1 — Compile using Maven
+          - task: Maven@4
+            displayName: 'Step 1: Compile Project (Maven)'
+            inputs:
+              mavenPomFile: '$(mavenPomFile)'
+              goals: 'compile'
+              publishJUnitResults: false
+              javaHomeOption: 'JDKVersion'
+              jdkVersionOption: '1.17'
+              mavenVersionOption: 'Default'
+
+          # STEP 2 — Unit tests + code coverage report (JaCoCo)
+          - task: Maven@4
+            displayName: 'Step 2: Unit Tests and Code Coverage (Maven + JaCoCo)'
+            inputs:
+              mavenPomFile: '$(mavenPomFile)'
+              goals: 'test'
+              publishJUnitResults: true
+              testResultsFiles: '**/surefire-reports/TEST-*.xml'
+              codeCoverageToolOption: 'JaCoCo'
+              codeCoverageClassFilter: '+:com.*,-:com.*Test*'
+              javaHomeOption: 'JDKVersion'
+              jdkVersionOption: '1.17'
+              mavenVersionOption: 'Default'
+
+          # SonarQube — static code analysis
+          - task: SonarQubePrepare@5
+            displayName: 'SonarQube: Prepare Analysis'
+            inputs:
+              SonarQube: 'SonarQube-Connection'   # Name of your SonarQube service connection
+              scannerMode: 'Other'
+              extraProperties: |
+                sonar.projectKey=$(SONAR_PROJECT_KEY)
+                sonar.host.url=$(SONAR_HOST_URL)
+                sonar.java.coveragePlugin=jacoco
+                sonar.coverage.jacoco.xmlReportPaths=$(Build.SourcesDirectory)/target/site/jacoco/jacoco.xml
+
+          - task: Maven@4
+            displayName: 'SonarQube: Run Analysis'
+            inputs:
+              mavenPomFile: '$(mavenPomFile)'
+              goals: 'sonar:sonar'
+              publishJUnitResults: false
+              javaHomeOption: 'JDKVersion'
+              jdkVersionOption: '1.17'
+
+          - task: SonarQubePublish@5
+            displayName: 'SonarQube: Publish Quality Gate Result'
+            inputs:
+              pollingTimeoutSec: '300'
+
+# ─────────────────────────────────────────────────────────────────
+# STAGE 2 — DELIVER (CD)
+# Maven release:perform packages and publishes the artifact
+# ─────────────────────────────────────────────────────────────────
+  - stage: Deliver
+    displayName: 'Deliver Stage'
+    dependsOn: Build
+    condition: succeeded()
+    jobs:
+      - job: DeliverJob
+        displayName: 'Release Artifact (Maven)'
+        pool:
+          name: 'Default'
+        steps:
+
+          - task: Maven@4
+            displayName: 'Maven Package and Publish Artifact'
+            inputs:
+              mavenPomFile: '$(mavenPomFile)'
+              goals: 'package'
+              publishJUnitResults: false
+              javaHomeOption: 'JDKVersion'
+              jdkVersionOption: '1.17'
+
+          - task: PublishBuildArtifacts@1
+            displayName: 'Publish Artifact to Drop'
+            inputs:
+              PathtoPublish: '$(Build.SourcesDirectory)/target'
+              ArtifactName: 'drop'
+              publishLocation: 'Container'
+
+# ─────────────────────────────────────────────────────────────────
+# STAGE 3 — DEPLOY TO DEV
+# ─────────────────────────────────────────────────────────────────
+  - stage: DeployDev
+    displayName: 'Deploy to Dev Environment'
+    dependsOn: Deliver
+    condition: succeeded()
+    jobs:
+      - deployment: DeployDev
+        displayName: 'Deploy to Dev'
+        pool:
+          name: 'Default'
+        environment: 'dev'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - download: current
+                  artifact: drop
+
+                - task: CopyFiles@2
+                  displayName: 'Deploy Artifact to Dev Server'
+                  inputs:
+                    SourceFolder: '$(Pipeline.Workspace)/drop'
+                    Contents: '**/*.jar'
+                    TargetFolder: 'C:\Deploy\Dev'
+                    CleanTargetFolder: true
+
+# ─────────────────────────────────────────────────────────────────
+# STAGE 4 — DEPLOY TO QAT
+# ─────────────────────────────────────────────────────────────────
+  - stage: DeployQAT
+    displayName: 'Deploy to QAT Environment'
+    dependsOn: DeployDev
+    condition: succeeded()
+    jobs:
+      - deployment: DeployQAT
+        displayName: 'Deploy to QAT'
+        pool:
+          name: 'Default'
+        environment: 'qat'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - download: current
+                  artifact: drop
+
+                - task: CopyFiles@2
+                  displayName: 'Deploy Artifact to QAT Server'
+                  inputs:
+                    SourceFolder: '$(Pipeline.Workspace)/drop'
+                    Contents: '**/*.jar'
+                    TargetFolder: 'C:\Deploy\QAT'
+                    CleanTargetFolder: true
+
+# ─────────────────────────────────────────────────────────────────
+# STAGE 5 — DEPLOY TO STAGING
+# ─────────────────────────────────────────────────────────────────
+  - stage: DeployStaging
+    displayName: 'Deploy to Staging Environment'
+    dependsOn: DeployQAT
+    condition: succeeded()
+    jobs:
+      - deployment: DeployStaging
+        displayName: 'Deploy to Staging'
+        pool:
+          name: 'Default'
+        environment: 'staging'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - download: current
+                  artifact: drop
+
+                - task: CopyFiles@2
+                  displayName: 'Deploy Artifact to Staging Server'
+                  inputs:
+                    SourceFolder: '$(Pipeline.Workspace)/drop'
+                    Contents: '**/*.jar'
+                    TargetFolder: 'C:\Deploy\Staging'
+                    CleanTargetFolder: true
+
+# ─────────────────────────────────────────────────────────────────
+# STAGE 6 — DEPLOY TO PRODUCTION
+# ─────────────────────────────────────────────────────────────────
+  - stage: DeployProduction
+    displayName: 'Deploy to Production Environment'
+    dependsOn: DeployStaging
+    condition: succeeded()
+    jobs:
+      - deployment: DeployProduction
+        displayName: 'Deploy to Production'
+        pool:
+          name: 'Default'
+        environment: 'production'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - download: current
+                  artifact: drop
+
+                - task: CopyFiles@2
+                  displayName: 'Deploy Artifact to Production Server'
+                  inputs:
+                    SourceFolder: '$(Pipeline.Workspace)/drop'
+                    Contents: '**/*.jar'
+                    TargetFolder: 'C:\Deploy\Production'
+                    CleanTargetFolder: true
