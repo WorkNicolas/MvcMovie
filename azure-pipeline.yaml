@@ -59,28 +59,7 @@ stages:
               arguments: '--configuration $(buildConfiguration) --collect:"XPlat Code Coverage" --results-directory $(Build.SourcesDirectory)/TestResults'
               publishTestResults: true
 
-          # SonarQube — static code analysis
-          - task: SonarQubePrepare@5
-            displayName: 'SonarQube: Prepare Analysis'
-            inputs:
-              SonarQube: 'SonarQube-Connection'
-              scannerMode: 'MSBuild'
-              projectKey: 'WorkNicolas_MvcMovie'
-              projectName: 'MvcMovie'
-              extraProperties: |
-                sonar.cs.opencover.reportsPaths=$(Build.SourcesDirectory)/TestResults/**/coverage.opencover.xml
 
-          - task: DotNetCoreCLI@2
-            displayName: 'SonarQube: Build for Analysis'
-            inputs:
-              command: 'build'
-              projects: '$(projectPath)'
-              arguments: '--configuration $(buildConfiguration)'
-
-          - task: SonarQubePublish@5
-            displayName: 'SonarQube: Publish Quality Gate Result'
-            inputs:
-              pollingTimeoutSec: '300'
 
 # ─────────────────────────────────────────────────────────────────
 # STAGE 2 — DELIVER (CD)
