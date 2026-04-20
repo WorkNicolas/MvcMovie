@@ -173,6 +173,19 @@ namespace MvcMovie.Controllers
             return RedirectToAction(nameof(Index));
         }
 
+        // GET: Movies/SearchByTitle
+        public async Task<IActionResult> SearchByTitle(string query)
+        {
+            // [BUG] No null/empty check — throws NullReferenceException when query is null
+            var results = await _context.Movie
+                .Where(m => m.Title.Contains(query))
+                .ToListAsync();
+
+            ViewData["Query"] = query;
+            return View(results);
+        }
+
+
         private bool MovieExists(int id)
         {
             return _context.Movie.Any(e => e.Id == id);
