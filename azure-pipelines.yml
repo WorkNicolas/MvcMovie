@@ -1,0 +1,225 @@
+# path/to/file: azure-pipelines.yml
+# Prerequisites:
+#   - GitHub connection via PAT set up in Azure DevOps
+#     Project Settings > Service Connections > GitHub (Personal Access Token)
+#   - SonarQube service connection set up in Azure DevOps
+#     Project Settings > Service Connections > SonarQube
+#   - Deploy folders created on agent machine:
+#     C:\Commons\Documents\Homework\Semester 6\COMP 367\Final Project\Deploy\Dev
+#     C:\Commons\Documents\Homework\Semester 6\COMP 367\Final Project\Deploy\QAT
+#     C:\Commons\Documents\Homework\Semester 6\COMP 367\Final Project\Deploy\Staging
+#     C:\Commons\Documents\Homework\Semester 6\COMP 367\Final Project\Deploy\Production
+
+trigger:
+  branches:
+    include:
+      - main
+
+resources:
+  repositories:
+    - repository: self
+      type: github
+      endpoint: 'GitHub-PAT-Connection'   # Name of your GitHub PAT service connection
+      name: WorkNicolas/MvcMovie
+
+variables:
+  buildConfiguration: 'Release'
+  projectPath: 'MvcMovie/MvcMovie.csproj'
+  deployBase: 'C:\Commons\Documents\Homework\Semester 6\COMP 367\Final Project\Deploy'
+
+stages:
+
+# ─────────────────────────────────────────────────────────────────
+# STAGE 1 — BUILD (CI)
+# Compiles the project and runs unit tests with code coverage
+# ─────────────────────────────────────────────────────────────────
+  - stage: Build
+    displayName: 'Build Stage'
+    jobs:
+      - job: BuildJob
+        displayName: 'Compile, Test, and Analyze'
+        pool:
+          name: 'Default'
+        steps:
+
+          # STEP 1 — Compile using dotnet build
+          - task: DotNetCoreCLI@2
+            displayName: 'Step 1: Compile Project (dotnet build)'
+            inputs:
+              command: 'build'
+              projects: '$(projectPath)'
+              arguments: '--configuration $(buildConfiguration)'
+
+          # STEP 2 — Unit tests + code coverage report (coverlet)
+          - task: DotNetCoreCLI@2
+            displayName: 'Step 2: Unit Tests and Code Coverage (dotnet test + coverlet)'
+            inputs:
+              command: 'test'
+              projects: '**/*Tests/*.csproj'
+              arguments: '--configuration $(buildConfiguration) --collect:"XPlat Code Coverage" --results-directory $(Build.SourcesDirectory)/TestResults'
+              publishTestResults: true
+
+          # SonarQube — static code analysis
+          - task: SonarQubePrepare@6
+            displayName: 'SonarQube: Prepare Analysis'
+            inputs:
+              SonarQube: 'SonarQube-Connection'
+              scannerMode: 'MSBuild'
+              projectKey: 'WorkNicolas_MvcMovie'
+              projectName: 'MvcMovie'
+              extraProperties: |
+                sonar.cs.opencover.reportsPaths=$(Build.SourcesDirectory)/TestResults/**/coverage.opencover.xml
+
+          - task: DotNetCoreCLI@2
+            displayName: 'SonarQube: Build for Analysis'
+            inputs:
+              command: 'build'
+              projects: '$(projectPath)'
+              arguments: '--configuration $(buildConfiguration)'
+
+          - task: SonarQubePublish@6
+            displayName: 'SonarQube: Publish Quality Gate Result'
+            inputs:
+              pollingTimeoutSec: '300'
+
+# ─────────────────────────────────────────────────────────────────
+# STAGE 2 — DELIVER (CD)
+# dotnet publish packages and publishes the artifact as a zip
+# ─────────────────────────────────────────────────────────────────
+  - stage: Deliver
+    displayName: 'Deliver Stage'
+    dependsOn: Build
+    condition: succeeded()
+    jobs:
+      - job: DeliverJob
+        displayName: 'Release Artifact (dotnet publish)'
+        pool:
+          name: 'Default'
+        steps:
+
+          - task: DotNetCoreCLI@2
+            displayName: 'dotnet publish — Package Artifact'
+            inputs:
+              command: 'publish'
+              publishWebProjects: true
+              arguments: '--configuration $(buildConfiguration) --output $(Build.ArtifactStagingDirectory)'
+              zipAfterPublish: true
+
+          - task: PublishBuildArtifacts@1
+            displayName: 'Publish Artifact to Drop'
+            inputs:
+              PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+              ArtifactName: 'drop'
+              publishLocation: 'Container'
+
+# ─────────────────────────────────────────────────────────────────
+# STAGE 3 — DEPLOY TO DEV
+# ─────────────────────────────────────────────────────────────────
+  - stage: DeployDev
+    displayName: 'Deploy to Dev Environment'
+    dependsOn: Deliver
+    condition: succeeded()
+    jobs:
+      - deployment: DeployDev
+        displayName: 'Deploy to Dev'
+        pool:
+          name: 'Default'
+        environment: 'dev'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - download: current
+                  artifact: drop
+
+                - task: CopyFiles@2
+                  displayName: 'Deploy Artifact to Dev Server'
+                  inputs:
+                    SourceFolder: '$(Pipeline.Workspace)/drop'
+                    Contents: '**/*.zip'
+                    TargetFolder: '$(deployBase)\Dev'
+                    CleanTargetFolder: true
+
+# ─────────────────────────────────────────────────────────────────
+# STAGE 4 — DEPLOY TO QAT
+# ─────────────────────────────────────────────────────────────────
+  - stage: DeployQAT
+    displayName: 'Deploy to QAT Environment'
+    dependsOn: DeployDev
+    condition: succeeded()
+    jobs:
+      - deployment: DeployQAT
+        displayName: 'Deploy to QAT'
+        pool:
+          name: 'Default'
+        environment: 'qat'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - download: current
+                  artifact: drop
+
+                - task: CopyFiles@2
+                  displayName: 'Deploy Artifact to QAT Server'
+                  inputs:
+                    SourceFolder: '$(Pipeline.Workspace)/drop'
+                    Contents: '**/*.zip'
+                    TargetFolder: '$(deployBase)\QAT'
+                    CleanTargetFolder: true
+
+# ─────────────────────────────────────────────────────────────────
+# STAGE 5 — DEPLOY TO STAGING
+# ─────────────────────────────────────────────────────────────────
+  - stage: DeployStaging
+    displayName: 'Deploy to Staging Environment'
+    dependsOn: DeployQAT
+    condition: succeeded()
+    jobs:
+      - deployment: DeployStaging
+        displayName: 'Deploy to Staging'
+        pool:
+          name: 'Default'
+        environment: 'staging'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - download: current
+                  artifact: drop
+
+                - task: CopyFiles@2
+                  displayName: 'Deploy Artifact to Staging Server'
+                  inputs:
+                    SourceFolder: '$(Pipeline.Workspace)/drop'
+                    Contents: '**/*.zip'
+                    TargetFolder: '$(deployBase)\Staging'
+                    CleanTargetFolder: true
+
+# ─────────────────────────────────────────────────────────────────
+# STAGE 6 — DEPLOY TO PRODUCTION
+# ─────────────────────────────────────────────────────────────────
+  - stage: DeployProduction
+    displayName: 'Deploy to Production Environment'
+    dependsOn: DeployStaging
+    condition: succeeded()
+    jobs:
+      - deployment: DeployProduction
+        displayName: 'Deploy to Production'
+        pool:
+          name: 'Default'
+        environment: 'production'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - download: current
+                  artifact: drop
+
+                - task: CopyFiles@2
+                  displayName: 'Deploy Artifact to Production Server'
+                  inputs:
+                    SourceFolder: '$(Pipeline.Workspace)/drop'
+                    Contents: '**/*.zip'
+                    TargetFolder: '$(deployBase)\Production'
+                    CleanTargetFolder: true
